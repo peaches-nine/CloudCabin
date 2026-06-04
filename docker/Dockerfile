@@ -9,6 +9,9 @@ FROM lscr.io/linuxserver/baseimage-kasmvnc:debianbookworm
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -eux; \
+    # 切换 APT 源到阿里云镜像（加速国内构建）
+    sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null; \
+    sed -i 's|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null; \
     # 中文字体（否则界面/消息显示方块）+ 语言环境 + 下载/解压工具
     apt-get update; \
     apt-get install -y --no-install-recommends \

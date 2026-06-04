@@ -1,0 +1,6 @@
+#!/bin/bash
+# 容器启动时修复 GPU 设备权限（root 执行）
+set -e
+for dev in /dev/dri/renderD128 /dev/dri/card1; do
+    [ -e "$dev" ] && chmod 666 "$dev" && echo "[gpu-fix] chmod 666 $dev"
+done

@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 
 export type Role = 'admin' | 'sub';
+export type AppType = 'wechat' | 'firefox' | 'gaming';
 
 export interface User {
   id: string;
@@ -12,7 +13,7 @@ export interface User {
   passwordHash: string;
   disabled: boolean;
   createdAt: string;
-  // 该账户可访问的微信实例 id 列表。admin 隐式全部，忽略此字段。
+  // 该账户可访问的实例 id 列表。admin 隐式全部，忽略此字段。
   allowedInstances: string[];
   // 仍在使用初始默认密码时为 true，前端据此提示尽快改密；任意一次改密/重置后清除。
   mustChangePassword?: boolean;
@@ -28,8 +29,9 @@ const DEFAULT_ADMIN_PASSWORD = 'wechat';
 export interface Instance {
   id: string; // 短 id，用于容器/卷命名
   name: string; // 显示名
-  containerName: string; // woc-wx-<id>
-  volumeName: string; // woc-data-<id>
+  appType: AppType; // 'wechat' | 'firefox'，决定镜像与行为
+  containerName: string; // cc-app-<id>
+  volumeName: string; // cc-data-<id>
   kasmUser: string; // 随机生成，服务端注入反代，永不下发前端
   kasmPassword: string;
   createdAt: string;
@@ -74,6 +76,10 @@ export function initStore() {
   if (!Array.isArray(data.instances)) data.instances = [];
   for (const u of data.users) {
     if (!Array.isArray(u.allowedInstances)) u.allowedInstances = [];
+  }
+  // 迁移：旧实例无 appType → 默认 wechat
+  for (const i of data.instances) {
+    if (!(i as any).appType) (i as any).appType = 'wechat';
   }
   if (!data.users.some((u) => u.role === 'admin')) {
     const username = process.env.PANEL_ADMIN_USER || 'admin';
@@ -190,7 +196,7 @@ function sanitizeInstanceIds(ids: string[]): string[] {
 }
 
 export function publicInstance(i: Instance) {
-  return { id: i.id, name: i.name, createdAt: i.createdAt, createdBy: i.createdBy };
+  return { id: i.id, name: i.name, appType: i.appType, createdAt: i.createdAt, createdBy: i.createdBy };
 }
 
 export function listInstances() {
@@ -213,13 +219,14 @@ export function userCanAccess(u: User, instanceId: string) {
   return u.allowedInstances.includes(instanceId) && !!findInstance(instanceId);
 }
 
-export function createInstance(name: string, createdBy: string, allowedUserIds: string[] = []) {
+export function createInstance(name: string, createdBy: string, allowedUserIds: string[] = [], appType: AppType = 'wechat') {
   const id = randomBytes(5).toString('hex'); // 10 hex chars
   const inst: Instance = {
     id,
-    name: name.trim() || `微信-${id.slice(0, 4)}`,
-    containerName: `woc-wx-${id}`,
-    volumeName: `woc-data-${id}`,
+    name: name.trim() || `${appType === 'firefox' ? '火狐' : '微信'}-${id.slice(0, 4)}`,
+    appType,
+    containerName: `cc-app-${id}`,
+    volumeName: `cc-data-${id}`,
     kasmUser: 'woc',
     // 用 hex（仅 0-9a-f）：容器内 init 脚本以 `openssl passwd -apr1 ${PASSWORD}` 未加引号方式生成 .htpasswd，
     // base64url 可能含前导 '-' 而被 openssl 当作命令行选项，导致密码哈希为空、所有鉴权失败。hex 不含任何 shell 特殊字符。
@@ -286,7 +293,7 @@ export function registerExistingInstance(opts: {
   createdBy: string;
 }) {
   const id = randomBytes(5).toString('hex');
-  const inst: Instance = { id, createdAt: new Date().toISOString(), ...opts };
+  const inst: Instance = { id, appType: 'wechat', createdAt: new Date().toISOString(), ...opts };
   data.instances.push(inst);
   persist();
   return inst;

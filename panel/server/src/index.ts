@@ -25,7 +25,9 @@ import {
   createInstance,
   removeInstance as removeInstanceRecord,
   renameInstance,
+
   setInstanceUsers,
+  type AppType,
   publicInstance,
   type User,
   type Instance,
@@ -232,7 +234,11 @@ app.post('/api/admin/instances', async (req, reply) => {
   if (!name || String(name).trim().length === 0 || String(name).length > 30) {
     return reply.code(400).send({ error: '实例名称为 1-30 个字符' });
   }
-  const inst = createInstance(String(name), admin.id, allowedUserIds);
+  const appType = ((req.body as any)?.appType || 'wechat') as AppType;
+  if (appType !== 'wechat' && appType !== 'firefox' && appType !== 'gaming') {
+    return reply.code(400).send({ error: 'appType 必须为 wechat 或 firefox' });
+  }
+  const inst = createInstance(String(name), admin.id, allowedUserIds, appType);
   try {
     await runInstance(inst);
   } catch (e: any) {

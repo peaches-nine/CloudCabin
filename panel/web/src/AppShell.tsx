@@ -97,6 +97,13 @@ export default function AppShell() {
     return () => m.removeEventListener('change', h);
   }, []);
 
+  // 进入桌面实例时自动收起侧栏（避免和 KasmVNC 控制条打架）
+  useEffect(() => {
+    if (loc.pathname.startsWith('/i/')) {
+      setCollapsed(true);
+    }
+  }, [loc.pathname]);
+
   useEffect(() => setDrawer(false), [loc.pathname]); // 路由变化关抽屉
 
   // 移动端不收成窄栏（改用抽屉）；折叠仅桌面生效
@@ -169,7 +176,7 @@ function Sidebar({ collapsed, onToggleCollapsed }: { collapsed: boolean; onToggl
         </button>
       </nav>
 
-      {!collapsed && <div className="sb-section">微信实例</div>}
+      {!collapsed && <div className="sb-section">实例</div>}
       <div className="sb-list">
         {instances.length === 0 && !collapsed && <div className="sb-empty">暂无可用实例</div>}
         {instances.map((inst) => {
@@ -246,7 +253,7 @@ function HomeView({ onOpenMenu, onChangePassword }: { onOpenMenu: () => void; on
         )}
 
         <div className="section-row">
-          <span className="section-title">我的微信实例</span>
+          <span className="section-title">我的实例</span>
           {isAdmin && (
             <button className="btn-text" onClick={() => nav('/admin')}>
               管理 ›
@@ -259,8 +266,8 @@ function HomeView({ onOpenMenu, onChangePassword }: { onOpenMenu: () => void; on
             <div className="empty-blob">
               <img src="/favicon.svg" alt="" />
             </div>
-            <div className="empty-title">还没有微信实例</div>
-            <div className="empty-sub">{isAdmin ? '去「管理」新建一个微信实例' : '请联系管理员为你分配实例'}</div>
+            <div className="empty-title">还没有实例</div>
+            <div className="empty-sub">{isAdmin ? '去「管理」新建一个实例' : '请联系管理员为你分配实例'}</div>
           </div>
         ) : (
           <div className="inst-grid">

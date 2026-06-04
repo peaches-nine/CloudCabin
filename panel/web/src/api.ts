@@ -4,14 +4,14 @@ export interface PanelUser {
   role: 'admin' | 'sub';
   disabled: boolean;
   createdAt: string;
-  allowedInstances: string[]; // admin 为空数组（隐式全部）
-  mustChangePassword?: boolean; // 仍在用默认密码时为 true
+  allowedInstances: string[];
+  mustChangePassword?: boolean;
 }
 
 export type WechatPhase = 'idle' | 'downloading' | 'extracting' | 'installing' | 'done' | 'error';
 export interface WechatStatus {
   phase: WechatPhase;
-  percent: number; // -1 表示进度不确定
+  percent: number;
   installed: boolean;
   version: string;
   message: string;
@@ -22,6 +22,7 @@ export type RuntimeState = 'running' | 'stopped' | 'missing';
 export interface PanelInstance {
   id: string;
   name: string;
+  appType: string;
   createdAt: string;
   createdBy: string;
 }
@@ -31,23 +32,16 @@ export interface InstanceWithStatus extends PanelInstance {
 }
 
 async function req<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
-  // 仅在有 body 时声明 JSON content-type：否则 Fastify 对「空 body + application/json」会报 400
-  const headers = opts.body ? { 'content-type': 'application/json', ...opts.headers } : opts.headers;
-  const res = await fetch(path, {
-    credentials: 'same-origin',
-    ...opts,
-    headers,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    // 会话过期：除登录/探测接口外，任意接口收到 401 都说明 cookie 失效，直接回登录页（避免页面卡在错误态）
-    const isAuthProbe = path.includes('/api/auth/login') || path.includes('/api/auth/me');
-    if (res.status === 401 && !isAuthProbe && location.pathname !== '/login') {
-      location.assign('/login');
-    }
-    throw new Error((data as any).error || `请求失败 (${res.status})`);
+  const headers: Record<string, string> = {};
+  if (opts.body) headers['content-type'] = 'application/json';
+  const res = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers as any) }, credentials: 'same-origin' });
+  if (res.status === 401) {
+    if (window.location.pathname !== '/login') window.location.href = '/login';
+    throw new Error('未登录');
   }
-  return data as T;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any).error || `请求失败 (${res.status})`);
+  return data;
 }
 
 export const api = {
@@ -73,12 +67,12 @@ export const api = {
   setUserInstances: (id: string, instanceIds: string[]) =>
     req<{ user: PanelUser }>(`/api/admin/users/${id}/instances`, { method: 'POST', body: JSON.stringify({ instanceIds }) }),
 
-  // 微信实例
+  // 实例
   listInstances: () => req<{ instances: InstanceWithStatus[] }>('/api/instances'),
-  createInstance: (name: string, allowedUserIds: string[] = []) =>
+  createInstance: (name: string, allowedUserIds: string[] = [], appType = 'wechat') =>
     req<{ instance: PanelInstance }>('/api/admin/instances', {
       method: 'POST',
-      body: JSON.stringify({ name, allowedUserIds }),
+      body: JSON.stringify({ name, allowedUserIds, appType }),
     }),
   renameInstance: (id: string, name: string) =>
     req<{ instance: PanelInstance }>(`/api/admin/instances/${id}/rename`, { method: 'POST', body: JSON.stringify({ name }) }),

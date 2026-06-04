@@ -1,0 +1,15 @@
+#!/bin/bash
+# Firefox 常驻启动脚本。由 KasmVNC openbox 会话在桌面就绪后执行。
+set -u
+
+export DISPLAY="${DISPLAY:-:1}"
+export LIBGL_ALWAYS_SOFTWARE=1
+
+# 正常模式启动 Firefox（保留 Tab 栏、地址栏）
+# 若 FF 崩溃/被关，2 秒后自动重启
+while true; do
+    echo "[autostart] 启动 Firefox"
+    firefox-esr --no-sandbox about:blank
+    echo "[autostart] Firefox 已退出，2 秒后重启"
+    sleep 2
+done

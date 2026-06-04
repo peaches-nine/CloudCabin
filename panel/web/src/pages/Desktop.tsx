@@ -8,7 +8,7 @@ import { useInstances } from '../AppShell';
 // KasmVNC noVNC 页面；反代按实例隔离：/desktop/<id>/* → 对应容器，注入凭据。
 function desktopUrl(id: string) {
   return (
-    `/desktop/${id}/vnc/index.html?autoconnect=1&path=desktop/${id}/websockify&resize=remote` +
+    `/desktop/${id}/vnc/index.html?autoconnect=1&path=desktop/${id}/websockify&resize=remote&show_control_bar=true` +
     '&reconnect=true&reconnect_delay=2000&clipboard_up=true&clipboard_down=true&clipboard_seamless=true'
   );
 }
@@ -53,7 +53,7 @@ export default function InstanceView({ onOpenMenu }: { onOpenMenu: () => void })
 
   const inst = instances.find((i) => i.id === id);
   const offline = inst ? inst.runtime !== 'running' : false;
-  const installed = !!inst && inst.wechat.installed && inst.wechat.phase !== 'downloading';
+  const installed = !!inst && (inst.appType !== 'wechat' || (inst.wechat.installed && inst.wechat.phase !== 'downloading'));
   const showVnc = !!inst && !offline && installed;
 
   // 切换实例时重置内嵌态
@@ -278,7 +278,7 @@ export default function InstanceView({ onOpenMenu }: { onOpenMenu: () => void })
     }
   };
 
-  const title = inst?.name || '微信实例';
+  const title = inst?.name || '实例';
 
   return (
     <div className="ws-page">

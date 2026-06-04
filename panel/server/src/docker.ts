@@ -4,6 +4,15 @@ import Docker from 'dockerode';
 import type { Instance } from './store.js';
 
 const WECHAT_IMAGE = process.env.WOC_WECHAT_IMAGE || 'ghcr.io/gloridust/wechat-on-cloud:latest';
+const FIREFOX_IMAGE = process.env.WOC_FIREFOX_IMAGE || 'ghcr.io/gloridust/cc-firefox:latest';
+const GAMING_IMAGE = process.env.WOC_GAMING_IMAGE || 'ghcr.io/gloridust/cc-gaming:latest';
+function instanceImage(inst: Instance): string {
+  switch (inst.appType) {
+    case 'firefox': return FIREFOX_IMAGE;
+    case 'gaming': return GAMING_IMAGE;
+    default: return WECHAT_IMAGE;
+  }
+}
 const PUID = process.env.PUID || '1000';
 const PGID = process.env.PGID || '1000';
 const TZ = process.env.TZ || 'Asia/Shanghai';
@@ -32,11 +41,6 @@ export async function ensureNetwork(): Promise<string | null> {
 }
 
 // 摄像头直通：把宿主的 v4l2 视频设备映射进实例容器
-// （浏览器摄像头 → KasmVNC → 容器内 /dev/videoN(v4l2loopback) → 微信）。
-// 来源优先级：
-//   1) WOC_VIDEO_DEVICES 显式指定（逗号分隔，如 /dev/video0,/dev/video1）——Ubuntu/无法自动探测时用；
-//   2) 自动探测：把宿主 /dev 以只读挂到面板的 /host-dev（compose 可选），扫描其中的 videoN。
-// 一个都找不到则返回空：音频/麦克风不受影响，仅摄像头不可用（优雅降级）。
 function videoDevices(): string[] {
   const explicit = (process.env.WOC_VIDEO_DEVICES || '')
     .split(',')
@@ -48,7 +52,7 @@ function videoDevices(): string[] {
       if (!existsSync(dir)) continue;
       const vids = readdirSync(dir)
         .filter((n) => /^video\d+$/.test(n))
-        .map((n) => `/dev/${n}`); // 宿主侧设备路径
+        .map((n) => `/dev/${n}`);
       if (vids.length) return vids;
     } catch {
       /* 无权限/不可读，忽略 */
@@ -67,21 +71,22 @@ function envList(inst: Instance): string[] {
   ];
 }
 
-// 确保微信镜像在本地存在；缺失则从 GHCR 拉取（首次新建实例时镜像通常还没拉过）。
-async function ensureImage(): Promise<void> {
+// 确保实例镜像在本地存在；缺失则从 GHCR 拉取。
+async function ensureImage(inst: Instance): Promise<void> {
+  const img = instanceImage(inst);
   try {
-    await docker.getImage(WECHAT_IMAGE).inspect();
+    await docker.getImage(img).inspect();
     return;
   } catch {
     /* 本地没有，下面拉取 */
   }
-  await pullImage();
+  await pullImage(inst);
 }
 
-// 创建并启动一个微信实例容器。若同名容器已存在则先移除（仅容器，不动卷）。
+// 创建并启动一个实例容器。若同名容器已存在则先移除（仅容器，不动卷）。
 export async function runInstance(inst: Instance): Promise<void> {
   const net = await ensureNetwork();
-  await ensureImage();
+  await ensureImage(inst);
   try {
     const existing = docker.getContainer(inst.containerName);
     await existing.inspect();
@@ -89,23 +94,38 @@ export async function runInstance(inst: Instance): Promise<void> {
   } catch {
     /* 不存在，正常 */
   }
-  // 摄像头设备（探测不到则为空数组 → 仅摄像头不可用，音频/麦克风照常）
   const vids = videoDevices();
   const hostConfig: Docker.HostConfig = {
     Binds: [`${inst.volumeName}:/config`],
     NetworkMode: net || undefined,
-    SecurityOpt: ['seccomp=unconfined'],
+    SecurityOpt: ['seccomp=unconfined', 'apparmor:unconfined'],
     ShmSize: SHM_SIZE,
     RestartPolicy: { Name: 'unless-stopped' },
+    // Steam 需要 user namespaces + bubblewrap (privileged 模式)
+    ...(inst.appType === 'gaming' ? { UsernsMode: 'host', Privileged: true } : {}),
   };
-  if (vids.length) {
-    hostConfig.Devices = vids.map((d) => ({ PathOnHost: d, PathInContainer: d, CgroupPermissions: 'rwm' }));
-    hostConfig.GroupAdd = ['video']; // 让容器内 abc 用户能访问 /dev/videoN
+  // Gaming 实例直通 GPU
+  // 面板通过 /host-dev 看到宿主 /dev，但传给 Docker 必须用宿主真实路径
+  const gpuDevs: Docker.DeviceMapping[] = [];
+  if (inst.appType === 'gaming') {
+    const probeDir = existsSync('/host-dev/dri') ? '/host-dev/dri' : '/dev/dri';
+    if (existsSync(probeDir)) {
+      const driFiles = readdirSync(probeDir).filter((n) => n.startsWith('card') || n.startsWith('render'));
+      for (const f of driFiles) {
+        // 使用宿主真实路径 /dev/dri/...，而非面板内的 /host-dev/dri/...
+        gpuDevs.push({ PathOnHost: `/dev/dri/${f}`, PathInContainer: `/dev/dri/${f}`, CgroupPermissions: 'rwm' });
+      }
+    }
+  }
+  if (vids.length || gpuDevs.length) {
+    hostConfig.Devices = [...vids.map((d) => ({ PathOnHost: d, PathInContainer: d, CgroupPermissions: 'rwm' })), ...gpuDevs];
+    hostConfig.GroupAdd = ['video', 'render'];
+
     console.log(`[docker] 实例 ${inst.id} 挂载摄像头设备: ${vids.join(', ')}`);
   }
   const container = await docker.createContainer({
     name: inst.containerName,
-    Image: WECHAT_IMAGE,
+    Image: instanceImage(inst),
     Hostname: inst.containerName,
     Env: envList(inst),
     ExposedPorts: { '3000/tcp': {} },
@@ -125,11 +145,11 @@ export async function ensureRunning(inst: Instance): Promise<void> {
   }
 }
 
-// 升级实例：拉取最新微信镜像后重建容器（保留数据卷 → 登录态不丢）。
-// 拉取失败（本地自构建 / 离线 / 仓库不可达）则用本地现有镜像重建，不阻断。
+// 升级实例：拉取最新镜像后重建容器（保留数据卷）。
+// 拉取失败则用本地现有镜像重建，不阻断。
 export async function upgradeInstance(inst: Instance): Promise<void> {
   try {
-    await pullImage();
+    await pullImage(inst);
   } catch (e: any) {
     console.warn('[docker] 升级时拉取镜像失败，改用本地镜像重建:', e?.message || e);
   }
@@ -186,8 +206,9 @@ async function execCapture(inst: Instance, cmd: string[]): Promise<string> {
   });
 }
 
-// 触发下载/安装（detached，立即返回，后台下载）。
+// 触发微信下载/安装（仅 wechat 类型实例）。firefox 等无需下载步骤。
 export async function triggerWechat(inst: Instance, cmd: 'install' | 'update'): Promise<void> {
+  if (inst.appType !== 'wechat') return; // 非微信类型无需此操作
   const c = docker.getContainer(inst.containerName);
   const exec = await c.exec({
     Cmd: ['/woc/wechat-ctl.sh', cmd === 'update' ? 'update' : 'install'],
@@ -210,6 +231,9 @@ export interface WechatStatus {
 const DEFAULT_STATUS: WechatStatus = { phase: 'idle', percent: 0, installed: false, version: '', message: '未安装', updatedAt: 0 };
 
 export async function wechatStatus(inst: Instance): Promise<WechatStatus> {
+  if (inst.appType !== 'wechat') {
+    return { ...DEFAULT_STATUS, phase: 'done', installed: true, message: '已就绪', percent: 100 };
+  }
   try {
     const raw = await execCapture(inst, ['/woc/wechat-ctl.sh', 'status']);
     const json = JSON.parse(raw.trim());
@@ -219,10 +243,11 @@ export async function wechatStatus(inst: Instance): Promise<WechatStatus> {
   }
 }
 
-// 拉取微信镜像（首次部署/更新镜像用）。返回拉取日志的最后状态。
-export async function pullImage(onProgress?: (line: any) => void): Promise<void> {
+// 拉取实例对应镜像（首次部署/更新镜像用）。
+export async function pullImage(inst: Instance, onProgress?: (line: any) => void): Promise<void> {
+  const img = instanceImage(inst);
   return await new Promise((resolve, reject) => {
-    docker.pull(WECHAT_IMAGE, (err: any, stream: NodeJS.ReadableStream) => {
+    docker.pull(img, (err: any, stream: NodeJS.ReadableStream) => {
       if (err) return reject(err);
       docker.modem.followProgress(
         stream,
@@ -234,38 +259,34 @@ export async function pullImage(onProgress?: (line: any) => void): Promise<void>
 }
 
 // ---------- 文件中转（上传/下载） ----------
-// 中转目录 = abc 家目录下的 Desktop（/config 持久卷）。上传落这里，微信文件选择器可直接选到；
-// 反向：把微信收到的文件另存到桌面，即可在面板里下载。
 const TRANSFER_DIR = '/config/Desktop';
 
-// 极简单文件 tar 编码（putArchive 需要 tar；避免引入第三方依赖）。
 function tarSingleFile(name: string, content: Buffer): Buffer {
   const h = Buffer.alloc(512, 0);
-  h.write(name.slice(0, 100), 0, 'utf8'); // name
-  h.write('0000644\0', 100); // mode
-  h.write('0001750\0', 108); // uid 1000(octal 1750)
-  h.write('0001750\0', 116); // gid 1000
-  h.write(content.length.toString(8).padStart(11, '0') + '\0', 124); // size
-  h.write('00000000000\0', 136); // mtime
-  h.write('        ', 148); // checksum 占位（8 空格）
-  h.write('0', 156); // typeflag 普通文件
+  h.write(name.slice(0, 100), 0, 'utf8');
+  h.write('0000644\0', 100);
+  h.write('0001750\0', 108);
+  h.write('0001750\0', 116);
+  h.write(content.length.toString(8).padStart(11, '0') + '\0', 124);
+  h.write('00000000000\0', 136);
+  h.write('        ', 148);
+  h.write('0', 156);
   h.write('ustar\0', 257);
   h.write('00', 263);
   let sum = 0;
   for (let i = 0; i < 512; i++) sum += h[i];
-  h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148); // 真实校验和
+  h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148);
   const pad = (512 - (content.length % 512)) % 512;
   return Buffer.concat([h, content, Buffer.alloc(pad, 0), Buffer.alloc(1024, 0)]);
 }
 
-// 校验文件名为安全 basename（防路径穿越）。
 function safeName(name: string): boolean {
   return !!name && name.length <= 200 && !name.includes('/') && !name.includes('\0') && name !== '.' && name !== '..';
 }
 
 export async function uploadToInstance(inst: Instance, name: string, content: Buffer): Promise<void> {
   if (!safeName(name)) throw new Error('文件名不合法');
-  await execCapture(inst, ['sh', '-c', `mkdir -p ${TRANSFER_DIR}`]); // abc 家目录可写
+  await execCapture(inst, ['sh', '-c', `mkdir -p ${TRANSFER_DIR}`]);
   const c = docker.getContainer(inst.containerName);
   await c.putArchive(tarSingleFile(name, content), { path: TRANSFER_DIR });
 }
@@ -291,7 +312,6 @@ export async function listInstanceFiles(inst: Instance): Promise<TransferFile[]>
 
 export async function deleteInstanceFile(inst: Instance, name: string): Promise<void> {
   if (!safeName(name)) throw new Error('文件名不合法');
-  // argv 数组直传，不经 shell；safeName 已排除路径穿越
   await execCapture(inst, ['rm', '-f', `${TRANSFER_DIR}/${name}`]);
 }
 
@@ -317,4 +337,4 @@ export function instanceTarget(inst: Instance): string {
   return `http://${inst.containerName}:3000`;
 }
 
-export { WECHAT_IMAGE };
+export { instanceImage };

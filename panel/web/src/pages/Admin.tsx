@@ -491,8 +491,8 @@ function InstanceAdminCard({
   else if (busy) sub = wx.percent >= 0 ? `${wx.message || '处理中'} ${wx.percent}%` : wx.message || '请稍候…';
   else if (wx.phase === 'error') sub = wx.message || '操作失败，可重试';
   else if (offline) sub = inst.runtime === 'missing' ? '容器尚未创建' : '容器已停止';
-  else if (installed) sub = wx.version ? `微信 ${wx.version}` : '微信已安装';
-  else sub = '微信尚未安装';
+  else if (installed) sub = wx.version ? `${inst.appType === 'firefox' ? 'Firefox' : '微信'} ${wx.version}` : (inst.appType === 'firefox' ? '已就绪' : '微信已安装');
+  else sub = inst.appType === 'firefox' ? '已就绪' : '微信尚未安装';
 
   return (
     <div className="inst-card">
@@ -523,14 +523,14 @@ function InstanceAdminCard({
                 {inst.runtime === 'missing' ? '创建并启动' : '启动实例'}
               </button>
             ) : (
-              <button className="btn btn-primary inst-act-wide" disabled={!installed} onClick={onEnter} title={installed ? '' : '需先下载安装微信'}>
+              <button className="btn btn-primary inst-act-wide" disabled={!installed && inst.appType === 'wechat'} onClick={onEnter} title={installed || inst.appType !== 'wechat' ? '' : '需先下载安装微信'}>
                 进入实例
               </button>
             )}
           </div>
 
           <div className="inst-admin-links">
-            {!offline && (
+            {!offline && inst.appType === 'wechat' && (
               <button className="btn-text" onClick={() => onTrigger(inst, installed ? 'update' : 'install')}>
                 {installed ? '更新微信' : '下载安装'}
               </button>
@@ -651,6 +651,7 @@ function CreateUser({ instances, onClose, onDone }: { instances: InstanceWithSta
 function CreateInstance({ subs, onClose, onDone }: { subs: PanelUser[]; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState('');
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [appType, setAppType] = useState('wechat');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -659,7 +660,7 @@ function CreateInstance({ subs, onClose, onDone }: { subs: PanelUser[]; onClose:
     setErr('');
     setBusy(true);
     try {
-      await api.createInstance(name.trim(), [...sel]);
+      await api.createInstance(name.trim(), [...sel], appType);
       onDone();
     } catch (e: any) {
       setErr(e.message || '创建失败');
@@ -668,11 +669,23 @@ function CreateInstance({ subs, onClose, onDone }: { subs: PanelUser[]; onClose:
     }
   };
 
+  const appHint = appType === 'gaming'
+    ? '创建后会拉起 Steam 游戏容器，需要直通 GPU。首次启动 Steam 会自更新。'
+    : appType === 'firefox'
+    ? '创建后会拉起一个 Firefox 容器，进入即用。'
+    : '创建后会拉起一个新的微信容器，进入后扫码登录。';
+
   return (
     <div className="modal-mask" onClick={onClose}>
       <form className="card modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <h2>新建微信实例</h2>
-        <input className="input" placeholder="实例名称（如：我的微信 / 公司号）" value={name} onChange={(e) => setName(e.target.value)} />
+        <h2>新建实例</h2>
+        <div className="field-label">应用类型</div>
+        <select className="input" value={appType} onChange={(e) => setAppType(e.target.value)} style={{ marginBottom: 12 }}>
+          <option value="wechat">微信</option>
+          <option value="firefox">火狐浏览器</option>
+          <option value="gaming">Steam 游戏</option>
+        </select>
+        <input className="input" placeholder={appType === 'firefox' ? '实例名称（如：浏览器-工作）' : '实例名称（如：我的微信 / 公司号）'} value={name} onChange={(e) => setName(e.target.value)} />
         <div className="field-label">允许访问的子账号（管理员默认可访问全部）</div>
         <ChipMultiSelect
           options={subs.map((u) => ({ id: u.id, label: u.username }))}
@@ -681,7 +694,7 @@ function CreateInstance({ subs, onClose, onDone }: { subs: PanelUser[]; onClose:
           empty="暂无子账号"
         />
         {err && <div className="error">{err}</div>}
-        <div className="muted small" style={{ marginTop: 4 }}>创建后会拉起一个新的微信容器，进入后扫码登录。</div>
+        <div className="muted small" style={{ marginTop: 4 }}>{appHint}</div>
         <div className="modal-actions">
           <button type="button" className="btn" onClick={onClose}>
             取消

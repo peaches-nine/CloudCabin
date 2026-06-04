@@ -1,0 +1,18 @@
+#!/bin/bash
+set -u
+export DISPLAY="${DISPLAY:-:1}"
+export LIBGL_ALWAYS_SOFTWARE=0
+export MESA_LOADER_DRIVER_OVERRIDE=iris
+export vblank_mode=0
+
+while ! glxinfo -B 2>/dev/null | grep -q "Accelerated: yes"; do
+    echo "[autostart] 等待 GPU…"; sleep 2
+done
+echo "[autostart] GPU: $(glxinfo -B 2>/dev/null | grep Device: | head -1)"
+
+while true; do
+    echo "[autostart] 启动 Steam"
+    /usr/bin/steam -bigpicture -no-cef-sandbox
+    echo "[autostart] Steam 已退出，5 秒后重启"
+    sleep 5
+done
